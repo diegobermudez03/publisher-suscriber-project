@@ -1,0 +1,5 @@
+A: noticia de prueba 1
+E: Nueva noticia de E
+C: noticia notica noticia
+P: Hola como estas tu
+S: jejeejjeejejejeje

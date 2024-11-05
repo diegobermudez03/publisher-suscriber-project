@@ -12,8 +12,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-pthread_t hilos_tema[5];
-
 void ObtenerSuscripciones(char* noticias){
     int contador = 0;
     while(1){
@@ -52,9 +50,9 @@ void ObtenerSuscripciones(char* noticias){
     }
 }
 
-void ObtenerPipes(char** pipes, int fd, int pid){
+void ObtenerPipe(char* pipe, int fd, int pid) {
     char buffer_entrada[200];
-    while(1){
+    while(1) {
         memset(buffer_entrada, 0, sizeof(buffer_entrada));
         ssize_t bytes_leidos = read(fd, buffer_entrada, sizeof(buffer_entrada) - 1);
         if (bytes_leidos > 0) {
@@ -62,15 +60,12 @@ void ObtenerPipes(char** pipes, int fd, int pid){
             int numero;
             char* endptr;
             numero = (int)strtol(buffer_entrada, &endptr, 10);
-            //si el numero al inicio del mensaje es nuestro pid es porque esta es la respuesta que esperabamos
-            if(numero == pid){
-                printf("\nRespusta recibida %s\n\n", buffer_entrada);
-                char* posicion = endptr;
-                char* pipe_temp;
-                int index = 0;
-                while ((pipe_temp = strtok(posicion, " ")) != NULL && index < 5) {
-                    pipes[index++] = strdup(pipe_temp);
-                    posicion = NULL;
+            // Si el número al inicio del mensaje es nuestro pid, es la respuesta que esperábamos
+            if(numero == pid) {
+                printf("\nRespuesta recibida %s\n\n", buffer_entrada);
+                char* pipe_start = strchr(endptr, '/');
+                if (pipe_start != NULL) {
+                    strncpy(pipe, pipe_start, strlen(pipe_start) + 1);
                 }
                 break;
             }
@@ -78,12 +73,11 @@ void ObtenerPipes(char** pipes, int fd, int pid){
     }
 }
 
-void* EscucharSuscripcion(void* arg){
-    char* nombre_pipe = (char*)arg;
+void EscucharSuscripcion(char* nombre_pipe){
     int fd = open(nombre_pipe, O_RDONLY);
     if (fd == -1) {
          perror("Error con suscription");
-         return NULL;
+         return;
     }
     char buffer_entrada[81];
     while(1){
@@ -93,15 +87,14 @@ void* EscucharSuscripcion(void* arg){
             buffer_entrada[bytes_leidos] = '\0';
             if (strncmp(buffer_entrada, "0:", 2) == 0) {
                 printf("%s\n", buffer_entrada + 2);
-                return NULL;
+                close(fd);
+                return;
             } else {
-                printf("Recibiendo noticia: %s \n", buffer_entrada);
+                printf("****Recibiendo noticia: %s \n", buffer_entrada);
             }
          }
     }
-    return NULL;
 }
-
 
 int main(int argc, char** argsv){
     char* nombre_pipe = NULL;
@@ -137,10 +130,9 @@ int main(int argc, char** argsv){
     printf("S: Noticia de Sucesos\n");
     printf("0: YA NO MAS\n\n");
 
-    int contador = 0;
     ObtenerSuscripciones(noticias);
 
-    //despues de obtener todas las categorias a suscribirse entonces creamos el mensaje a enviar para suscribirnos
+    // Crear el mensaje de suscripcion con el PID y las categorias seleccionadas
     pid_t pid = getpid();
     char* mensaje = malloc(64);
     sprintf(mensaje, "%d", pid);
@@ -154,9 +146,8 @@ int main(int argc, char** argsv){
     close(fd_solicitud);
     free(mensaje);
 
-    //Ahora esperamos a una respuesta del sistema, hasta que encontremos la que sea para nosotros, identificamos esto por el PID
-    char buffer_entrada[200];
-    char* pipes_suscripciones[5] = {"x", "x", "x", "x", "x"};
+    // Ahora esperamos a una respuesta del sistema, que contendra el nombre del pipe unico para este suscriptor
+    char pipe_suscripcion[100];
 
     // Abrir el pipe de respuesta para lectura
     int fd_respuesta = open(nombre_pipe_respuesta, O_RDONLY);
@@ -165,20 +156,11 @@ int main(int argc, char** argsv){
         exit(1);
     }
 
-
-    ObtenerPipes(pipes_suscripciones, fd_respuesta, pid);
+    ObtenerPipe(pipe_suscripcion, fd_respuesta, pid);
     close(fd_respuesta);
 
-    int hilo_index = 0;
-    for(int i = 0; i < 5; i++){
-        if(strcmp(pipes_suscripciones[i],"x") != 0){
-            pthread_create(&hilos_tema[hilo_index++], NULL, EscucharSuscripcion, (void *)pipes_suscripciones[i]);
-        }
-    }
-
-    for(int i = 0; i < hilo_index; i++){
-        pthread_join(hilos_tema[i], NULL);
-    }
+    // Escuchar las noticias a traves del pipe unico para este suscriptor
+    EscucharSuscripcion(pipe_suscripcion);
 
     return 0;
 }

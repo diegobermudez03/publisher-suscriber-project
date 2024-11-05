@@ -3,3 +3,7 @@ P: Se aproximan las elecciones.
 P: Hay un nuevo candidato en Alianza Popular. 
 E: Fue exitosa la presentación de Maluma. 
 C: Hoy son las votaciones en EEUU. 
+C: VAMOS A VER QUE PASA
+A: probando probando
+P: probando mas
+S: una noticia de s

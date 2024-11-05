@@ -12,16 +12,20 @@
 #include <sys/wait.h>
 #include <ctype.h>
 
-
-struct Noticia{
-    char nombre;
+struct Suscriptor {
+    int pid;
+    char categorias[5];
     char* nombre_pipe;
     int fd_pipe;
 };
 
-struct Noticia noticias[5];
+struct Suscriptor suscriptores[100]; // Máximo 100 suscriptores
+int total_suscriptores = 0;
 int segundos_esperar;
-int abiertos = 0;   //lleva control de los publicadores abiertos, de esta forma sabe cuando no haya ninguno
+int abiertos = 0;
+int fd_sus_solicitud;
+int fd_sus_respuesta;
+int fd_publicadores;
 sem_t mutex_abiertos;
 sem_t mutex_noticias;
 
@@ -46,22 +50,11 @@ void DeserializarMensajeSuscriptor(const char* input, char letters[], int* numbe
     }
 }
 
-char* GenerarInvitacion(const char not[5], int pid, struct Noticia noticias[5]) {
+char* GenerarInvitacion(int pid, char* nombre_pipe) {
     char* resultado = malloc(1024); 
-    sprintf(resultado, "%d", pid);
-    for (int i = 0; i < 5; i++) {
-        if (not[i] != '\0') {
-            for (int j = 0; j < 5; j++) {
-                if (not[i] == noticias[j].nombre) {
-                    strcat(resultado, " ");
-                    strcat(resultado, noticias[j].nombre_pipe);
-                }
-            }
-        }
-    }
+    sprintf(resultado, "%d %s", pid, nombre_pipe);
     return resultado;
 }
-
 
 void* ManejarSuscriptores(void* arg){
     char* nombre_pipe_base = (char*)arg;
@@ -83,14 +76,14 @@ void* ManejarSuscriptores(void* arg){
         exit(1);
     }
 
-    int fd_solicitud = open(nombre_pipe_solicitud, O_RDONLY);
-    if(fd_solicitud == -1){
+    fd_sus_solicitud = open(nombre_pipe_solicitud, O_RDONLY);
+    if(fd_sus_solicitud == -1){
         perror("Error abriendo pipe de solicitud");
         exit(1);
     }
 
-    int fd_respuesta = open(nombre_pipe_respuesta, O_WRONLY);
-    if(fd_respuesta == -1){
+    fd_sus_respuesta = open(nombre_pipe_respuesta, O_WRONLY);
+    if(fd_sus_respuesta == -1){
         perror("Error abriendo pipe de respuesta");
         exit(1);
     }
@@ -99,25 +92,46 @@ void* ManejarSuscriptores(void* arg){
 
     while(1){
         memset(buffer_entrada, 0, sizeof(buffer_entrada));
-        ssize_t bytes_leidos = read(fd_solicitud, buffer_entrada, sizeof(buffer_entrada) - 1);
+        ssize_t bytes_leidos = read(fd_sus_solicitud, buffer_entrada, sizeof(buffer_entrada) - 1);
         if (bytes_leidos > 0) {
-            printf("recibiendo solicitud %s \n", buffer_entrada);
+            printf("----recibiendo solicitud %s \n", buffer_entrada);
             buffer_entrada[bytes_leidos] = '\0';
             char letras[5];
             int pid;
             DeserializarMensajeSuscriptor(buffer_entrada, letras, &pid);
 
-            char* mensaje = GenerarInvitacion(letras, pid, noticias);
-            printf("\ninvitacion enviada %s\n\n", mensaje);
-            write(fd_respuesta, mensaje, strlen(mensaje) + 1);
+            // Crear pipe único para el suscriptor
+            struct Suscriptor nuevo_suscriptor;
+            nuevo_suscriptor.pid = pid;
+            strncpy(nuevo_suscriptor.categorias, letras, 5);
+            nuevo_suscriptor.nombre_pipe = malloc(100);
+            snprintf(nuevo_suscriptor.nombre_pipe, 100, "/tmp/suscriptor%d", pid);
+            unlink(nuevo_suscriptor.nombre_pipe);
+            if (mkfifo(nuevo_suscriptor.nombre_pipe, 0666) == -1) {
+                perror("Error creando el pipe para el suscriptor");
+                exit(1);
+            }
+            nuevo_suscriptor.fd_pipe = open(nuevo_suscriptor.nombre_pipe, O_RDWR);
+            if (nuevo_suscriptor.fd_pipe == -1) {
+                perror("Error abriendo pipe para el suscriptor");
+                exit(1);
+            }
+
+            // Agregar el suscriptor a la lista
+            sem_wait(&mutex_noticias);
+            suscriptores[total_suscriptores++] = nuevo_suscriptor;
+            sem_post(&mutex_noticias);
+            // Enviar invitación al suscriptor
+            char* mensaje = GenerarInvitacion(pid, nuevo_suscriptor.nombre_pipe);
+            printf("\n----invitacion enviada %s\n\n", mensaje);
+            write(fd_sus_respuesta, mensaje, strlen(mensaje) + 1);
+            free(mensaje);
         }
     }
-    close(fd_solicitud);
-    close(fd_respuesta);
+    close(fd_sus_solicitud);
+    close(fd_sus_respuesta);
     return NULL;
 }
-
-
 
 void* ManejarPublicacion(void* arg) {
     char* buffer = (char*)arg;
@@ -139,13 +153,15 @@ void* ManejarPublicacion(void* arg) {
             sem_wait(&mutex_abiertos);
             if (abiertos == 0) {
                 sem_wait(&mutex_noticias);
-                for (int i = 0; i < 5; i++) {
-                    if (noticias[i].nombre_pipe != NULL) {
-                        char mensaje_fin[100];
-                        snprintf(mensaje_fin, sizeof(mensaje_fin), "0: se acabaron las noticias de categoria %c", noticias[i].nombre);
-                        write(noticias[i].fd_pipe, mensaje_fin, strlen(mensaje_fin) + 1);
-                    }
+                for (int i = 0; i < total_suscriptores; i++) {
+                    char mensaje_fin[100];
+                    snprintf(mensaje_fin, sizeof(mensaje_fin), "0:Se acabaron las noticias :(");
+                    write(suscriptores[i].fd_pipe, mensaje_fin, strlen(mensaje_fin) + 1);
+                    close(suscriptores[i].fd_pipe);
                 }
+                close(fd_publicadores);
+                close(fd_sus_respuesta);
+                close(fd_sus_solicitud);
                 sem_post(&mutex_noticias);
                 sem_post(&mutex_abiertos);
                 free(buffer);
@@ -157,12 +173,13 @@ void* ManejarPublicacion(void* arg) {
         char llave = buffer[0];
 
         sem_wait(&mutex_noticias);
-        for (int i = 0; i < 5; i++) {
-            if (noticias[i].nombre == llave) {
-                char* mensaje_a_enviar = buffer + 2; // Quitar los primeros 2 caracteres (la "llave" y ":")
-                write(noticias[i].fd_pipe, mensaje_a_enviar, strlen(mensaje_a_enviar) + 1);
-                printf("emitiendo noticia %s\n", mensaje_a_enviar);
-                break;
+        for (int i = 0; i < total_suscriptores; i++) {
+            for (int j = 0; j < 5; j++) {
+                if (suscriptores[i].categorias[j] == llave) {
+                    write(suscriptores[i].fd_pipe, buffer, strlen(buffer) + 1);
+                    printf("Enviando noticia a suscriptor %d: %s\n", suscriptores[i].pid, buffer);
+                    break;
+                }
             }
         }
         sem_post(&mutex_noticias);
@@ -171,15 +188,14 @@ void* ManejarPublicacion(void* arg) {
     return NULL;
 }
 
-
 void* EscucharPublicadores(void* arg) {
     char* nombre_pipe = (char*)arg;
-    int fd_pipe =  open(nombre_pipe, O_RDONLY);
+    fd_publicadores =  open(nombre_pipe, O_RDONLY);
     char buffer_entrada[500];
 
     while (1) {
         memset(buffer_entrada, 0, sizeof(buffer_entrada));
-        ssize_t bytes_leidos = read(fd_pipe, buffer_entrada, sizeof(buffer_entrada) - 1);
+        ssize_t bytes_leidos = read(fd_publicadores, buffer_entrada, sizeof(buffer_entrada) - 1);
         if (bytes_leidos > 0) {
             buffer_entrada[bytes_leidos] = '\0';
             char* buffer_copia = malloc(bytes_leidos + 1);
@@ -189,11 +205,9 @@ void* EscucharPublicadores(void* arg) {
             pthread_create(&hilo_publicacion, NULL, ManejarPublicacion, (void*)buffer_copia);
         }
     }
-    close(fd_pipe);
+    close(fd_publicadores);
     return NULL;
 }
-
-
 
 int main(int argc, char** argsv){
     char tipos_noticias[] = {'A', 'E', 'C', 'P', 'S'};
@@ -226,24 +240,6 @@ int main(int argc, char** argsv){
         exit(1);
     }
     segundos_esperar = seg_espera;
-
-    //inicializar pipes noticias
-    for(int i = 0; i < 5; i++){
-        noticias[i].nombre = tipos_noticias[i];
-        noticias[i].nombre_pipe = malloc(7);
-        snprintf(noticias[i].nombre_pipe, 7, "/tmp/%c", tipos_noticias[i]);
-        unlink(noticias[i].nombre_pipe);    //para eliminar si ya existe, por alguna razon
-        if (mkfifo(noticias[i].nombre_pipe, 0666) == -1) {
-            perror("Error creando el pipe de noticia");
-            exit(1);
-        }
-        int fd_pipe = open(noticias[i].nombre_pipe, O_RDWR);
-        if(fd_pipe == -1){
-            perror("Error abriendo  pipe para una categoria");
-            exit(1);
-        }
-        noticias[i].fd_pipe = fd_pipe;
-    } 
     
     //creando pipes
     unlink(nombre_publicadores);
@@ -268,10 +264,6 @@ int main(int argc, char** argsv){
     //liberar memoria
     free(nombre_publicadores);
     free(nombre_suscriptores);
-    for(int i = 0; i < 5;i++){
-        free(noticias[i].nombre_pipe);
-        close(noticias[i].fd_pipe);
-    }
 
     return 0;
 }
