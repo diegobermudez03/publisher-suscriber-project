@@ -51,7 +51,7 @@ int main(int argc, char** argsv){
         exit(1);
     }
 
-    // Enviar mensaje "abierto" por el pipe
+    //enviar mensaje "abierto" por el pipe, esto indica al sistema que se unio un publicador
     char* mensaje_abierto = "abierto";
     write(fd_pipe, mensaje_abierto, strlen(mensaje_abierto) + 1);
 
@@ -66,15 +66,16 @@ int main(int argc, char** argsv){
     size_t longitud = 0;
     ssize_t leido;
 
+    //se lee el archivo linea a linea y se envian al sistema, esperando entre noticia
+    //y noticia el tiempo estipulado por la bandera
     while ((leido = getline(&linea, &longitud, archivo)) != -1) {
-        // Enviar cada linea por el pipe
         write(fd_pipe, linea, leido + 1);
         printf("\nNoticia enviada %s\n", linea);
-        // Esperar seg_espera segundos
         sleep(segundos_esperar);
     }
 
-    // Enviar mensaje "cerrado" por el pipe
+    //luego de leer todo el archivo se envia un mensaje de cerrado al sistema
+    //esto es para que el sepa que un publicador acaba de terminar, y pueda llevar control de si hay publicadores vivos
     char* mensaje_cerrado = "cerrado";
     write(fd_pipe, mensaje_cerrado, strlen(mensaje_cerrado) + 1);
 
