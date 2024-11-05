@@ -169,7 +169,7 @@ int main(int argc, char** argsv){
     
     //creando pipes
     mkfifo(nombre_publicadores, 0666);
-    int pub_pipe = open(nombre_publicadores, O_RDONLY);
+    int pub_pipe = open(nombre_publicadores, O_RDWR);
 
     mkfifo(nombre_suscriptores, 0666);
     int sus_pipe = open(nombre_suscriptores, O_WRONLY);
