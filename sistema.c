@@ -250,7 +250,6 @@ void* EscucharPublicadores(void* arg) {
 
 
 int main(int argc, char** argsv){
-    char tipos_noticias[] = {'A', 'E', 'C', 'P', 'S'};
     //validacion de argumentos
     
     char* nombre_publicadores = NULL;
