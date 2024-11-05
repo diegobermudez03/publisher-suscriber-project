@@ -21,20 +21,26 @@ struct Noticia{
 
 struct Noticia noticias[5];
 int segundos_esperar;
+int abiertos = 0;   //lleva control de los publicadores abiertos, de esta forma sabe cuando no haya ninguno
+sem_t mutex_abiertos;
+sem_t mutex_noticias;
 
 void DeserializarMensajeSuscriptor(const char* input, char letters[], int* number) {
     int i = 0;
     int letter_index = 0;
     memset(letters, 0, 5);
     *number = 0;
+    while (input[i] != '\0' && isdigit(input[i])) {
+        i++;
+    }
+    if (i > 0) {
+        *number = atoi(input);
+    }
     while (input[i] != '\0') {
         if (isalpha(input[i])) {
             if (letter_index < 5) {
                 letters[letter_index++] = input[i];
             }
-        } else if (isdigit(input[i])) {
-            *number = atoi(&input[i]);
-            break;
         }
         i++;
     }
@@ -53,7 +59,6 @@ char* GenerarInvitacion(const char not[5], int pid, struct Noticia noticias[5]) 
             }
         }
     }
-    printf("Se termino de generar invitacion\n");
     return resultado;
 }
 
@@ -101,7 +106,9 @@ void* ManejarSuscriptores(void* arg){
             char letras[5];
             int pid;
             DeserializarMensajeSuscriptor(buffer_entrada, letras, &pid);
+
             char* mensaje = GenerarInvitacion(letras, pid, noticias);
+            printf("\ninvitacion enviada %s\n\n", mensaje);
             write(fd_respuesta, mensaje, strlen(mensaje) + 1);
         }
     }
@@ -112,10 +119,54 @@ void* ManejarSuscriptores(void* arg){
 
 
 
-void* ManejarPublicacion(void* arg){
+void* ManejarPublicacion(void* arg) {
     char* buffer = (char*)arg;
 
+    // Verificar si el mensaje es "abierto" o "cerrado"
+    if (strcmp(buffer, "abierto") == 0) {
+        sem_wait(&mutex_abiertos);
+        abiertos++;
+        sem_post(&mutex_abiertos);
+    } else if (strcmp(buffer, "cerrado") == 0) {
+        sem_wait(&mutex_abiertos);
+        abiertos--;
+        int abiertos_local = abiertos;
+        sem_post(&mutex_abiertos);
 
+        if (abiertos_local == 0) {
+            sleep(segundos_esperar);
+
+            sem_wait(&mutex_abiertos);
+            if (abiertos == 0) {
+                sem_wait(&mutex_noticias);
+                for (int i = 0; i < 5; i++) {
+                    if (noticias[i].nombre_pipe != NULL) {
+                        char mensaje_fin[100];
+                        snprintf(mensaje_fin, sizeof(mensaje_fin), "0: se acabaron las noticias de categoria %c", noticias[i].nombre);
+                        write(noticias[i].fd_pipe, mensaje_fin, strlen(mensaje_fin) + 1);
+                    }
+                }
+                sem_post(&mutex_noticias);
+                sem_post(&mutex_abiertos);
+                free(buffer);
+                exit(0);
+            }
+            sem_post(&mutex_abiertos);
+        }
+    } else {
+        char llave = buffer[0];
+
+        sem_wait(&mutex_noticias);
+        for (int i = 0; i < 5; i++) {
+            if (noticias[i].nombre == llave) {
+                char* mensaje_a_enviar = buffer + 2; // Quitar los primeros 2 caracteres (la "llave" y ":")
+                write(noticias[i].fd_pipe, mensaje_a_enviar, strlen(mensaje_a_enviar) + 1);
+                printf("emitiendo noticia %s\n", mensaje_a_enviar);
+                break;
+            }
+        }
+        sem_post(&mutex_noticias);
+    }
     free(buffer);
     return NULL;
 }
@@ -125,19 +176,11 @@ void* EscucharPublicadores(void* arg) {
     char* nombre_pipe = (char*)arg;
     int fd_pipe =  open(nombre_pipe, O_RDONLY);
     char buffer_entrada[500];
-    time_t tiempo_inicio, tiempo_actual;
 
-    //para que el pipe sea no bloqueante y poder contabilizar
-    fcntl(fd_pipe, F_SETFL, O_NONBLOCK);
-
-    time(&tiempo_inicio);
     while (1) {
         memset(buffer_entrada, 0, sizeof(buffer_entrada));
         ssize_t bytes_leidos = read(fd_pipe, buffer_entrada, sizeof(buffer_entrada) - 1);
         if (bytes_leidos > 0) {
-            //para reiniciar el contador
-            time(&tiempo_inicio);
-
             buffer_entrada[bytes_leidos] = '\0';
             char* buffer_copia = malloc(bytes_leidos + 1);
             strncpy(buffer_copia, buffer_entrada, bytes_leidos + 1);
@@ -145,14 +188,6 @@ void* EscucharPublicadores(void* arg) {
             pthread_t hilo_publicacion;
             pthread_create(&hilo_publicacion, NULL, ManejarPublicacion, (void*)buffer_copia);
         }
-
-        time(&tiempo_actual);
-        if (difftime(tiempo_actual, tiempo_inicio) >= segundos_esperar) {
-            break;
-        }
-
-        //para hacer pequeñas pausas y no estar super pegado al CPU
-        usleep(100000);
     }
     close(fd_pipe);
     return NULL;
@@ -213,6 +248,10 @@ int main(int argc, char** argsv){
     //creando pipes
     unlink(nombre_publicadores);
     mkfifo(nombre_publicadores, 0666);
+
+    sem_init(&mutex_abiertos, 0, 1);
+    sem_init(&mutex_noticias, 0, 1);
+
 
     //creando hilo que handlea los publicadores
     pthread_t  hilo_publicadores;
