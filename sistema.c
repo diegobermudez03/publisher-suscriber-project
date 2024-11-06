@@ -251,7 +251,6 @@ void* EscucharPublicadores(void* arg) {
 
 int main(int argc, char** argsv){
     //validacion de argumentos
-    
     char* nombre_publicadores = NULL;
     char* nombre_suscriptores = NULL;
     const char *pipe_prefix = "/tmp/";
