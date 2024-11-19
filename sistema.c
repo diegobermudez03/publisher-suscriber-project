@@ -12,29 +12,7 @@
 #include <sys/wait.h>
 #include <ctype.h>
 
-struct Suscriptor {
-    int pid;
-    char categorias[5];
-    char* nombre_pipe;
-    int fd_pipe;
-};
-
-//todas estas variables globales son debido a la concurrencia del programa
-//son variables que multiples threads deberan manejar
-struct Suscriptor suscriptores[100]; //máximo 100 suscriptores
-int total_suscriptores = 0; //control de cuantos suscriptores tenemos
-int abiertos = 0;      //control de publicadores activos
-int segundos_esperar = -1;    //segundos a esperar indicados por la flag
-
-//decriptores de estos pipes son globales para que cualquier thread pueda cerrarlos
-int fd_sus_solicitud;   
-int fd_sus_respuesta;
-int fd_publicadores;
-
-//semaforos para control de zonas criticas
-sem_t mutex_abiertos;
-sem_t mutex_noticias;
-
+#include "sistema.h"
 
 //funcion que se encarga de deserializar el mensaje recibido por los suscriptores, se encarga de 
 //extraer el pid y las categorias
@@ -178,6 +156,7 @@ void* ManejarPublicacion(void* arg) {
                 for (int i = 0; i < total_suscriptores; i++) {
                     //se le notifica a los suscriptores que se acabaron los mensajes y se cierra el pipe de cada uno
                     char mensaje_fin[100];
+                    printf("\nInformando acerca de funalizacion a suscriptor %d", suscriptores[i].pid);
                     snprintf(mensaje_fin, sizeof(mensaje_fin), "0:Se acabaron las noticias :(");
                     write(suscriptores[i].fd_pipe, mensaje_fin, strlen(mensaje_fin) + 1);
                     close(suscriptores[i].fd_pipe);

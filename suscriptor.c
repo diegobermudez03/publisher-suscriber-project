@@ -12,6 +12,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "suscriptor.h"
+
 
 //funcion que se encarga de obtener las noticias de suscripcion por pantalla
 void ObtenerSuscripciones(char* noticias){

@@ -12,9 +12,9 @@
 #include <sys/wait.h>
 #include <ctype.h>
 
-#define MAX_LINEAS 100
 
-int segundos_esperar;
+#include "publicador.h"
+
 
 int main(int argc, char** argsv){
     //validacion de argumentos
